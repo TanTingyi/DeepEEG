@@ -1,2 +1,2 @@
 # WaveNet-EEG
-EEG  Tensorflow WaveNet
+Trying to apply the wavenet to EEG data.
