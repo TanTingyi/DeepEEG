@@ -87,6 +87,7 @@ class WaveNet(Model):
             dilations: A list with the dilation factor for each layer.
             filter_width: The samples that are included in each convolution,
                 after dilating.
+            signal_length: The length of input wave.
             residual_channels: How many filters to learn for the residual.
             dilation_channels: How many filters to learn for the dilated
                 convolution.
@@ -97,6 +98,7 @@ class WaveNet(Model):
                 Default: 256 (8-bit quantization).
             use_biases: Whether to add a bias layer to each convolution.
                 Default: False.
+            regularizer: Regularzation weight
             scalar_input: Whether to use the quantized waveform directly as
                 input to the network instead of one-hot encoding it.
                 Default: False.
@@ -194,7 +196,7 @@ class WaveNet(Model):
         return post_block
 
     def call(self, inputs, training=None):
-        
+
         x = self.pre_block(inputs, training=training)
         x = self.residual_blocks(x, training=training)
         x = self.post_block(x, training=training)
