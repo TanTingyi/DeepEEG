@@ -1,10 +1,13 @@
 import tensorflow as tf
 from tensorflow.keras import Model, Sequential
-from tensorflow.keras.layers import Layer, Conv1D, Input, Add, Activation
+from tensorflow.keras.layers import Layer, Conv1D, Conv2D, Input, InputLayer, Add
+from tensorflow.keras.layers import Activation, Lambda, Dense, Dropout
+from tensorflow.keras.layers import BatchNormalization, AveragePooling1D, Flatten
 from tensorflow.keras.regularizers import l2
+from tensorflow import keras
 
 
-class DilatedBlock(Layer):
+class DilatedBlock(Model):
     """
     Creates a single causal dilated convolution layer
 
@@ -15,9 +18,9 @@ class DilatedBlock(Layer):
                 |------------------------------------|
     """
     def __init__(self, dilation, output_width, residual_channels,
-                 dilation_channels, skip_channels, use_biases, regularizer):
-        super(DilatedBlock, self).__init__()
-
+                 dilation_channels, skip_channels, use_biases, regularizer,
+                 last_layer, **kwargs):
+        super(DilatedBlock, self).__init__(**kwargs)
         self.output_width = output_width
         self.conv_filter = Conv1D(dilation_channels,
                                   2,
@@ -47,23 +50,40 @@ class DilatedBlock(Layer):
                                         use_bias=use_biases,
                                         kernel_regularizer=l2(l=regularizer),
                                         bias_regularizer=l2(l=regularizer))
+        self.last_layer = last_layer
 
     def call(self, inputs, training=None):
-        # [b, sample, residual_channels]
-        filters = self.conv_filter(inputs)
-        gates = self.conv_gate(inputs)
-        out = filters * gates
 
-        # The 1x1 conv to produce the residual output
-        transformed = self.transformed(out)
+        if self.last_layer:
+            # [b, sample, residual_channels]
+            filters = self.conv_filter(inputs)
+            gates = self.conv_gate(inputs)
+            out = filters * gates
 
-        # The 1x1 conv to produce the skip output
-        skip_cut = tf.shape(out)[1] - self.output_width
-        out_skip = tf.slice(out, [0, skip_cut, 0], [-1, -1, -1])
+            # The 1x1 conv to produce the skip output
+            skip_cut = tf.shape(out)[1] - self.output_width
+            out_skip = tf.slice(out, [0, skip_cut, 0], [-1, -1, -1])
 
-        skip_contribution = self.skip_contribution(out_skip)
+            skip_contribution = self.skip_contribution(out_skip)
 
-        return skip_contribution, inputs + transformed
+            return skip_contribution
+
+        else:
+            # [b, sample, residual_channels]
+            filters = self.conv_filter(inputs)
+            gates = self.conv_gate(inputs)
+            out = filters * gates
+
+            # The 1x1 conv to produce the residual output
+            transformed = self.transformed(out)
+
+            # The 1x1 conv to produce the skip output
+            skip_cut = tf.shape(out)[1] - self.output_width
+            out_skip = tf.slice(out, [0, skip_cut, 0], [-1, -1, -1])
+
+            skip_contribution = self.skip_contribution(out_skip)
+
+            return skip_contribution, inputs + transformed
 
 
 class WaveNet(Model):
@@ -76,7 +96,7 @@ class WaveNet(Model):
         dilation_channels = 32  # Not specified in the paper.
         skip_channels = 16      # Not specified in the paper.
     '''
-    def __init__(self, dilations, filter_width, signal_length,
+    def __init__(self, batch_size, dilations, filter_width, signal_length,
                  residual_channels, dilation_channels, skip_channels,
                  quantization_channels, use_biases, regularizer):
         '''Initializes the WaveNet model.
@@ -99,14 +119,14 @@ class WaveNet(Model):
             use_biases: Whether to add a bias layer to each convolution.
                 Default: False.
             regularizer: Regularzation weight
+
+            TODO:
             scalar_input: Whether to use the quantized waveform directly as
                 input to the network instead of one-hot encoding it.
                 Default: False.
             initial_filter_width: The width of the initial filter of the
                 convolution applied to the scalar input. This is only relevant
                 if scalar_input=True.
-            histograms: Whether to store histograms in the summary.
-                Default: False.
             global_condition_channels: Number of channels in (embedding
                 size) of global conditioning vector. None indicates there is
                 no global conditioning.
@@ -121,6 +141,7 @@ class WaveNet(Model):
         '''
         super(WaveNet, self).__init__()
 
+        self.batch_size = batch_size
         self.dilations = dilations
         self.filter_width = filter_width
         self.residual_channels = residual_channels
@@ -162,11 +183,18 @@ class WaveNet(Model):
         # Add all defined dilation layers.
         inputs = Input(shape=(self.signal_length, self.residual_channels))
         current_layer = inputs
-        for dilation in self.dilations:
-            output, current_layer = DilatedBlock(
-                dilation, self.output_width, self.residual_channels,
-                self.dilation_channels, self.skip_channels, self.use_biases,
-                self.regularizer)(current_layer)
+        for i, dilation in enumerate(self.dilations):
+            if i == len(self.dilations) - 1:
+                output = DilatedBlock(dilation, self.output_width,
+                                      self.residual_channels,
+                                      self.dilation_channels,
+                                      self.skip_channels, self.use_biases,
+                                      self.regularizer, True)(current_layer)
+            else:
+                output, current_layer = DilatedBlock(
+                    dilation, self.output_width, self.residual_channels,
+                    self.dilation_channels, self.skip_channels,
+                    self.use_biases, self.regularizer, False)(current_layer)
             outputs.append(output)
 
         outputs = Add()(outputs)
@@ -202,3 +230,176 @@ class WaveNet(Model):
         x = self.post_block(x, training=training)
 
         return x
+
+
+class EEGWaveNetv1(Model):
+    '''
+    Implements the WaveNet network for EEG classification.
+    The shape of inputs must be [batch_size, signal_length, data_channels, 1].
+    Set tensorflow data format as channle last
+    '''
+    def __init__(self, signal_length, data_channels, dilations, filter_width,
+                 residual_channels, dilation_channels, skip_channels,
+                 use_biases, regularizer):
+        '''
+        Initializes the EEGWaveNet model.
+        
+        Args:
+            signal_length: How long of raw data.
+            data_channels: How many channels of raw data.
+            dilations: A list with the dilation factor for each layer.
+            filter_width: The samples that are included in each convolution,
+                after dilating.
+            residual_channels: How many filters to learn for the residual.
+            dilation_channels: How many filters to learn for the dilated
+                convolution.
+            skip_channels: How many filters to learn that contribute to the
+                quantized softmax output.
+            use_biases: Whether to add a bias layer to each convolution.
+                Default: False.
+            regularizer: Regularzation weight
+        '''
+        super(EEGWaveNet, self).__init__()
+        self.signal_length = signal_length
+        self.data_channels = data_channels
+        self.dilations = dilations
+        self.filter_width = filter_width
+        self.residual_channels = residual_channels
+        self.dilation_channels = dilation_channels
+        self.skip_channels = skip_channels
+        self.use_biases = use_biases
+        self.regularizer = regularizer
+        self.pre_block = self._build_preprocess_block()
+        self.residual_blocks = self._build_residual_blocks()
+        self.post_block = self._build_postprocess_block()
+
+    def _build_preprocess_block(self):
+        # [batch_size, data_channels, signal_length, 1]
+        pre_block = Sequential(
+            [
+                Input((self.data_channels, self.signal_length, 1)),
+                Conv2D(self.residual_channels, (1, self.filter_width),
+                       padding='same',
+                       use_bias=self.use_biases,
+                       kernel_regularizer=l2(l=self.regularizer),
+                       bias_regularizer=l2(l=self.regularizer)),
+                BatchNormalization(),
+                Activation('elu'),
+                # [batch_size, data_channels, signal_length, residual_channels]
+                Conv2D(self.residual_channels, (self.data_channels, 1),
+                       use_bias=self.use_biases,
+                       kernel_regularizer=l2(l=self.regularizer),
+                       bias_regularizer=l2(l=self.regularizer)),
+                BatchNormalization(axis=-1),
+                Activation('elu'),
+                # [batch_size, 1, signal_length, residual_channels]
+                Lambda(tf.squeeze, arguments=dict(axis=1)) 
+            ],
+            name='preprocess_block')
+        # [batch_size, signal_length, residual_channels]
+        return pre_block
+
+    def _build_residual_blocks(self):
+        def test_block(inputs):
+            # [b, sample, residual_channels]
+            filters = Conv1D(self.dilation_channels,
+                             self.filter_width,
+                             dilation_rate=dilation,
+                             padding='causal',
+                             activation='tanh',
+                             use_bias=self.use_biases,
+                             kernel_regularizer=l2(l=self.regularizer),
+                             bias_regularizer=l2(l=self.regularizer))(inputs)
+            gates = Conv1D(self.dilation_channels,
+                           self.filter_width,
+                           dilation_rate=dilation,
+                           padding='causal',
+                           activation='sigmoid',
+                           use_bias=self.use_biases,
+                           kernel_regularizer=l2(l=self.regularizer),
+                           bias_regularizer=l2(l=self.regularizer))(inputs)
+            out = filters * gates
+            skip_contribution = Conv1D(
+                self.skip_channels,
+                1,
+                padding='same',
+                use_bias=self.use_biases,
+                kernel_regularizer=l2(l=self.regularizer),
+                bias_regularizer=l2(l=self.regularizer))(out)
+            if last_layer:
+                return skip_contribution, None
+            else:
+                transformed = Conv1D(
+                    self.residual_channels,
+                    1,
+                    padding='same',
+                    use_bias=self.use_biases,
+                    kernel_regularizer=l2(l=self.regularizer),
+                    bias_regularizer=l2(l=self.regularizer))(out)
+                return skip_contribution, inputs + transformed
+
+        outputs = []
+        # Add all defined dilation layers.
+        # [batch_size, signal_length, residual_channels]
+        inputs = Input(shape=(self.signal_length, self.residual_channels))
+        current_layer = inputs
+        for i, dilation in enumerate(self.dilations):
+            last_layer = (i == (len(self.dilations) - 1))
+            output, current_layer = test_block(current_layer)
+            outputs.append(output)
+
+        outputs = Add()(outputs)
+        # [batch_size, signal_length, skip_channels]
+        return Model(inputs, outputs, name='residual_blocks')
+
+    def _build_postprocess_block(self):
+        post_block = Sequential([
+            Input((self.signal_length, self.skip_channels)),
+            BatchNormalization(),
+            Activation('elu'),
+            Dropout(0.5),
+            Conv1D(16,
+                   1,
+                   padding='same',
+                   strides=1,
+                   use_bias=self.use_biases,
+                   kernel_regularizer=l2(l=self.regularizer),
+                   bias_regularizer=l2(l=self.regularizer)),
+            BatchNormalization(),
+            Activation('elu'),
+            Dropout(0.5),
+            AveragePooling1D(pool_size=4),
+            Conv1D(8,
+                   3,
+                   padding='valid',
+                   strides=1,
+                   use_bias=self.use_biases,
+                   kernel_regularizer=l2(l=self.regularizer),
+                   bias_regularizer=l2(l=self.regularizer)),
+            BatchNormalization(),
+            Activation('elu'),
+            Dropout(0.5),
+            AveragePooling1D(pool_size=4),
+            Conv1D(4,
+                   1,
+                   padding='same',
+                   strides=1,
+                   use_bias=self.use_biases,
+                   kernel_regularizer=l2(l=self.regularizer),
+                   bias_regularizer=l2(l=self.regularizer)),
+            Flatten(),
+            Dense(2,
+                  kernel_regularizer=l2(l=self.regularizer),
+                  bias_regularizer=l2(l=self.regularizer))
+        ])
+
+        return post_block
+
+    def call(self, inputs, training=None):
+
+        x = self.pre_block(inputs, training=training)
+        x = self.residual_blocks(x, training=training)
+        x = self.post_block(x, training=training)
+
+        return x
+
