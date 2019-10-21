@@ -1,8 +1,15 @@
 import os
+import datetime
 import tensorflow as tf
 import numpy as np
-from wavenet import WaveNet, DilatedBlock
+from wavenet import WaveNet, DilatedBlock, EEGWaveNetv3
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras import utils as np_utils
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.wrappers import scikit_learn
+from tensorflow.keras.callbacks import ModelCheckpoint
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.random.set_seed(2345)
@@ -22,7 +29,7 @@ F3 = 233.08  # B-flat frequency in hz
 
 def make_sine_waves(global_conditioning):
     """Creates a time-series of sinusoidal audio amplitudes."""
-    sample_period = 1.0/SAMPLE_RATE_HZ
+    sample_period = 1.0 / SAMPLE_RATE_HZ
     times = np.arange(0.0, SAMPLE_DURATION, sample_period)
 
     if global_conditioning:
@@ -33,12 +40,12 @@ def make_sine_waves(global_conditioning):
         amplitudes[2, 0:LEADING_SILENCE] = 0.0
         start_time = LEADING_SILENCE / SAMPLE_RATE_HZ
         times = times[LEADING_SILENCE:] - start_time
-        amplitudes[0, LEADING_SILENCE:] = 0.6 * np.sin(times *
-                                                       2.0 * np.pi * F1)
-        amplitudes[1, LEADING_SILENCE:] = 0.5 * np.sin(times *
-                                                       2.0 * np.pi * F2)
-        amplitudes[2, LEADING_SILENCE:] = 0.4 * np.sin(times *
-                                                       2.0 * np.pi * F3)
+        amplitudes[0, LEADING_SILENCE:] = 0.6 * np.sin(
+            times * 2.0 * np.pi * F1)
+        amplitudes[1, LEADING_SILENCE:] = 0.5 * np.sin(
+            times * 2.0 * np.pi * F2)
+        amplitudes[2, LEADING_SILENCE:] = 0.4 * np.sin(
+            times * 2.0 * np.pi * F3)
         speaker_ids = np.zeros((NUM_SPEAKERS, 1), dtype=np.int)
         speaker_ids[0, 0] = 0
         speaker_ids[1, 0] = 1
@@ -77,8 +84,8 @@ def generate_waveform(sess, net, fast_generation, gc, samples_placeholder,
             feed_dict[gc_placeholder] = gc
         results = sess.run(operations, feed_dict=feed_dict)
 
-        sample = np.random.choice(
-           np.arange(QUANTIZATION_CHANNELS), p=results[0])
+        sample = np.random.choice(np.arange(QUANTIZATION_CHANNELS),
+                                  p=results[0])
         waveform.append(sample)
 
     # Skip the first number of samples equal to the size of the receptive
@@ -98,8 +105,8 @@ def generate_waveforms(sess, net, fast_generation, global_condition):
     net.batch_size = 1
 
     if fast_generation:
-        next_sample_probs = net.predict_proba_incremental(samples_placeholder,
-                                                          global_condition)
+        next_sample_probs = net.predict_proba_incremental(
+            samples_placeholder, global_condition)
         sess.run(net.init_ops)
         operations = [next_sample_probs]
         operations.extend(net.push_ops)
@@ -117,9 +124,11 @@ def generate_waveforms(sess, net, fast_generation, global_condition):
             gc = global_condition[waveform_index, :]
         # Generate a waveform for each speaker id.
         print("Generating waveform {}.".format(waveform_index))
-        waveforms[waveform_index] = generate_waveform(
-            sess, net, fast_generation, gc, samples_placeholder,
-            gc_placeholder, operations)
+        waveforms[waveform_index] = generate_waveform(sess, net,
+                                                      fast_generation, gc,
+                                                      samples_placeholder,
+                                                      gc_placeholder,
+                                                      operations)
 
     return waveforms, global_condition
 
@@ -137,8 +146,10 @@ def check_waveform(assertion, generated_waveform, gc_category):
     power_spectrum = np.abs(np.fft.fft(generated_waveform))**2
     freqs = np.fft.fftfreq(generated_waveform.size, SAMPLE_PERIOD_SECS)
     indices = np.argsort(freqs)
-    indices = [index for index in indices if freqs[index] >= 0 and
-               freqs[index] <= 500.0]
+    indices = [
+        index for index in indices
+        if freqs[index] >= 0 and freqs[index] <= 500.0
+    ]
     power_spectrum = power_spectrum[indices]
     freqs = freqs[indices]
     # plt.plot(freqs[indices], power_spectrum[indices])
@@ -157,15 +168,17 @@ def check_waveform(assertion, generated_waveform, gc_category):
         # corresponding to the gc_category to be much higher than at the other
         # two frequencies.
         frequency_lut = {0: f1_power, 1: f2_power, 2: f3_power}
-        other_freqs_lut = {0: f2_power + f3_power,
-                           1: f1_power + f3_power,
-                           2: f1_power + f2_power}
+        other_freqs_lut = {
+            0: f2_power + f3_power,
+            1: f1_power + f3_power,
+            2: f1_power + f2_power
+        }
         expected_power = frequency_lut[gc_category]
         # Power at the selected frequency should be at least 10 times greater
         # than at other frequences.
         # This is a weak criterion, but still detects implementation errors
         # in the code.
-        assertion(expected_power, 10.0*other_freqs_lut[gc_category])
+        assertion(expected_power, 10.0 * other_freqs_lut[gc_category])
 
 
 def mu_law_encode(audio, quantization_channels):
@@ -209,6 +222,12 @@ def one_hot(input_batch, quantization_channels):
     return encoded
 
 
+def standardization(X):
+    mu = np.mean(X, axis=0)
+    sigma = np.std(X, axis=0)
+    return (X - mu) / sigma
+
+
 def test():
     np.random.seed(42)
     audio, speaker_ids = make_sine_waves(None)
@@ -229,10 +248,10 @@ def test():
     print('input shape: ', tf.shape(input_one_hot))
     print('output shape: ', tf.shape(target_one_hot))
 
-    net = WaveNet(dilations, 2, signal_length, 32, 32, 32, 2**8, True, 0.01)
+    net = WaveNet(1, dilations, 2, signal_length, 32, 32, 32, 2**8, True, 0.01)
     net.build(input_shape=(None, signal_length, 2**8))
     optimizer = Adam(lr=1e-3)
-    
+
     for epoch in range(301):
         with tf.GradientTape() as tape:
             # [b, 1254, 256] => [b, 999, 256]
@@ -245,12 +264,66 @@ def test():
                                                       logits,
                                                       from_logits=True)
             loss = tf.reduce_mean(loss)
-    
+
         grads = tape.gradient(loss, net.trainable_variables)
         optimizer.apply_gradients(zip(grads, net.trainable_variables))
         if epoch % 100 == 0:
             print(epoch, 'loss: ', float(loss))
 
 
+def eeg_test():
+    X = np.load(r'E:\Data\mi_data_230.npy')
+    y = np.load(r'E:\Data\mi_labels_230.npy')
+
+    kernels, chans, samples = 1, X.shape[1], X.shape[2]
+
+    X = standardization(X)
+    # X = np.transpose(X, (0, 2, 1))
+    X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.3)
+    del X
+    # convert labels to one-hot encodings.
+    Y_train = np_utils.to_categorical(Y_train, 2, dtype='int32')
+    Y_validation = np_utils.to_categorical(Y_test[:500], 2, dtype='int32')
+    Y_test = np_utils.to_categorical(Y_test[500:], 2, dtype='int32')
+
+    # convert data to NCHW (trials, kernels, channels, samples) format. Data
+    # contains 60 channels and 151 time-points. Set the number of kernels to 1.
+    X_train = X_train.reshape(X_train.shape[0], chans, samples,
+                              kernels).astype(np.float32)
+    X_validation = X_test[:500].reshape(X_test[:500].shape[0], chans, samples,
+                                        kernels).astype(np.float32)
+    X_test = X_test[500:].reshape(X_test[500:].shape[0], chans, samples,
+                                  kernels).astype(np.float32)
+
+    data_train = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
+    data_train = data_train.batch(8)
+    data_test = tf.data.Dataset.from_tensor_slices((X_test, Y_test))
+    data_test = data_test.batch(8)
+    data_validation = tf.data.Dataset.from_tensor_slices(
+        (X_validation, Y_validation))
+    data_validation = data_validation.batch(8)
+
+    log_dir = r"logs\fit\\" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
+
+    dilations = [2**i for i in range(7)]
+    model = EEGWaveNetv3(641,
+                       64,
+                       dilations=dilations,
+                       filter_width=3,
+                       residual_channels=8,
+                       dilation_channels=16,
+                       skip_channels=2,
+                       use_biases=True,   
+                       regularizer=0.001)
+    model.build(input_shape=(None, 64, 641, 1))
+    model.summary()
+    model.compile(
+        optimizer='adam',
+        loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True, label_smoothing=0.2),
+        metrics=['acc'])
+    model.fit(data_train, validation_data=data_validation, epochs=30, callbacks=[tensorboard_callback])
+
 if __name__ == "__main__":
-    test()
+    # test()
+    eeg_test()
