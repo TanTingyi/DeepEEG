@@ -2,7 +2,7 @@ import os
 import datetime
 import tensorflow as tf
 import numpy as np
-from wavenet import WaveNet, DilatedBlock, EEGWaveNetv3
+from wavenet import WaveNet, DilatedBlock, EEGWaveNetv4
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import utils as np_utils
 from tensorflow.keras.callbacks import EarlyStopping
@@ -281,13 +281,10 @@ def eeg_test():
     # X = np.transpose(X, (0, 2, 1))
     X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.3)
     del X
-    # convert labels to one-hot encodings.
     Y_train = np_utils.to_categorical(Y_train, 2, dtype='int32')
     Y_validation = np_utils.to_categorical(Y_test[:500], 2, dtype='int32')
     Y_test = np_utils.to_categorical(Y_test[500:], 2, dtype='int32')
 
-    # convert data to NCHW (trials, kernels, channels, samples) format. Data
-    # contains 60 channels and 151 time-points. Set the number of kernels to 1.
     X_train = X_train.reshape(X_train.shape[0], chans, samples,
                               kernels).astype(np.float32)
     X_validation = X_test[:500].reshape(X_test[:500].shape[0], chans, samples,
@@ -296,24 +293,24 @@ def eeg_test():
                                   kernels).astype(np.float32)
 
     data_train = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
-    data_train = data_train.batch(8)
+    data_train = data_train.shuffle(4000).batch(32)
     data_test = tf.data.Dataset.from_tensor_slices((X_test, Y_test))
-    data_test = data_test.batch(8)
+    data_test = data_test.shuffle(4000).batch(32)
     data_validation = tf.data.Dataset.from_tensor_slices(
         (X_validation, Y_validation))
-    data_validation = data_validation.batch(8)
+    data_validation = data_validation.shuffle(4000).batch(32)
 
     log_dir = r"logs\fit\\" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
 
     dilations = [2**i for i in range(7)]
-    model = EEGWaveNetv3(641,
+    model = EEGWaveNetv4(641,
                        64,
                        dilations=dilations,
                        filter_width=3,
                        residual_channels=8,
                        dilation_channels=16,
-                       skip_channels=2,
+                       skip_channels=4,
                        use_biases=True,   
                        regularizer=0.001)
     model.build(input_shape=(None, 64, 641, 1))
@@ -323,7 +320,8 @@ def eeg_test():
         loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True, label_smoothing=0.2),
         metrics=['acc'])
     model.fit(data_train, validation_data=data_validation, epochs=30, callbacks=[tensorboard_callback])
+    model.evaluate(data_test)
+
 
 if __name__ == "__main__":
-    # test()
     eeg_test()
