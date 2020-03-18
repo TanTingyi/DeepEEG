@@ -7,7 +7,7 @@ from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard, ReduceLROnP
 from tensorflow.keras.models import load_model
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.preprocessing import OneHotEncoder
-from mymodel.models import SincEEGNet, EEGNet
+from deepeeg.models import SincEEGNet, EEGNet
 
 
 def preprocess(data, label):
