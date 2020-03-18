@@ -2,7 +2,7 @@ import os
 import datetime
 import tensorflow as tf
 import numpy as np
-from wavenet import WaveNet, DilatedBlock, EEGWaveNetv4
+from mymodel import WaveNet, DilatedBlock, EEGWaveNetv4
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import utils as np_utils
 from tensorflow.keras.callbacks import EarlyStopping
