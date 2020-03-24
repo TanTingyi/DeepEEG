@@ -1,20 +1,42 @@
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Activation, Dropout
-from tensorflow.keras.layers import Conv2D, AveragePooling2D
+from tensorflow.keras.layers import Conv2D, AveragePooling2D, GlobalAveragePooling2D
 from tensorflow.keras.layers import SeparableConv2D, DepthwiseConv2D
 from tensorflow.keras.layers import BatchNormalization
 from tensorflow.keras.layers import Input, Flatten
 from tensorflow.keras.constraints import max_norm
+import tensorflow as tf
 
 
-def EEGNet(nclass,
-           channel_size,
-           sample_size,
-           kernel_size,
-           dropoutRate=0.5,
-           F1=96,
-           D=1,
-           F2=96):
+def SqueezeExcitation(input, reduction_ratio):
+    'Input must be channel last'
+    num_filters = input.shape[-1]
+    pool = GlobalAveragePooling2D()(input)
+    squeeze = Dense(num_filters // reduction_ratio, activation='relu')(pool)
+    excitation = Dense(num_filters, activation='sigmoid')(squeeze)
+    scale = input * tf.reshape(excitation,
+                               [-1, 1, 1, num_filters])
+    return scale
+
+
+def DConv(input, reduction_ratio):
+    block1 = DepthwiseConv2D((1, 15))(input)
+    block1 = BatchNormalization()(block1)
+    block1 = Activation('relu')(block1)
+    block1 = SqueezeExcitation(block1, reduction_ratio)
+    block1 = AveragePooling2D((1, 2))(block1)
+    return block1
+
+
+def EEGSENet(nclass,
+             channel_size,
+             sample_size,
+             kernel_size,
+             reduction_ratio,
+             dropoutRate=0.5,
+             F1=96,
+             D=1,
+             F2=96):
 
     input1 = Input(shape=(channel_size, sample_size, 1))
     ##################################################################
@@ -43,3 +65,4 @@ def EEGNet(nclass,
     softmax = Activation('softmax', name='softmax')(dense)
 
     return Model(inputs=input1, outputs=softmax)
+
