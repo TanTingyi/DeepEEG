@@ -135,9 +135,10 @@ if __name__ == "__main__":
                             os.listdir(dict_name)))
     # dict_name = r'G:\eeg\data\dilay'
     # data_name = ['all_3class.npz']
+    
     path_list = [os.path.join(dict_name, name) for name in data_name]
 
     # test_delay_eegnet(r'G:\eeg\data\delay\all_3class.npz')
-    save_data(path_list)
+    # save_data(path_list)
 
-    # test_eegsenet(path_list)
+    test_eegsenet(path_list)
