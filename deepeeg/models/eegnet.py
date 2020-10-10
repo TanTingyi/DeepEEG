@@ -40,6 +40,6 @@ def EEGNet(nclass,
     flatten = Flatten(name='flatten')(block2)
 
     dense = Dense(nclass, name='dense')(flatten)
-    sigmoid = Activation('softmax', name='softmax')(dense)
+    softmax = Activation('softmax', name='softmax')(dense)
 
-    return Model(inputs=input1, outputs=sigmoid)
+    return Model(inputs=input1, outputs=softmax)
