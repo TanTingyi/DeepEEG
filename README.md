@@ -1,1 +1,1 @@
-# Some model for EEG data
+# Some deep learning models for EEG data
