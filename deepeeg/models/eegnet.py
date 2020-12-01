@@ -11,10 +11,12 @@ def EEGNet(nclass,
            channel_size,
            sample_size,
            kernel_size,
-           dropoutRate=0.5,
+           dropout_rate=0.5,
            F1=96,
            D=1,
-           F2=96):
+           F2=96,
+           *args,
+           **kwargs):
 
     input1 = Input(shape=(channel_size, sample_size, 1))
     ##################################################################
@@ -28,14 +30,14 @@ def EEGNet(nclass,
     block1 = BatchNormalization()(block1)
     block1 = Activation('elu')(block1)
     block1 = AveragePooling2D((1, 4))(block1)
-    block1 = Dropout(0.2)(block1)
+    block1 = Dropout(dropout_rate)(block1)
 
     block2 = SeparableConv2D(F2, (1, 16), use_bias=False,
                              padding='same')(block1)
     block2 = BatchNormalization()(block2)
     block2 = Activation('elu')(block2)
     block2 = AveragePooling2D((1, 8))(block2)
-    block2 = Dropout(0.2)(block2)
+    block2 = Dropout(dropout_rate)(block2)
 
     flatten = Flatten(name='flatten')(block2)
 
