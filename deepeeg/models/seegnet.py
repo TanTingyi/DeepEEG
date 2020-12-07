@@ -31,27 +31,27 @@ def SEEGNet(nclass,
                  sample_rate=sample_rate,
                  min_low_hz=min_low_hz,
                  min_band_hz=min_band_hz)(inputs)
-    x = BatchNormalization(momentum=0.95)(x)
+    x = BatchNormalization(momentum=0.85)(x)
 
     x = DepthwiseConv2D((channel_size, 1),
                         use_bias=False,
                         depth_multiplier=D,
                         depthwise_regularizer=l2(l2_reg))(x)
-    x = BatchNormalization(momentum=0.95)(x)
+    x = BatchNormalization(momentum=0.85)(x)
     x = Activation('relu')(x)
     x = Dropout(dropout_rate)(x)
     x = Conv2D(F1 * D, 1, use_bias=False)(x)
-    x = BatchNormalization(momentum=0.95)(x)
+    x = BatchNormalization(momentum=0.85)(x)
     x = Activation('relu')(x)
     x = AveragePooling2D((1, 4))(x)
     x = Dropout(dropout_rate)(x)
 
     x = DepthwiseConv2D((1, 16), use_bias=False, padding='same')(x)
-    x = BatchNormalization(momentum=0.95)(x)
+    x = BatchNormalization(momentum=0.85)(x)
     x = Activation('relu')(x)
     x = Dropout(dropout_rate)(x)
     x = Conv2D(F1 * D, 1, use_bias=False)(x)
-    x = BatchNormalization(momentum=0.95)(x)
+    x = BatchNormalization(momentum=0.85)(x)
     x = Activation('relu')(x)
     x = AveragePooling2D((1, 8))(x)
     x = Dropout(dropout_rate)(x)
