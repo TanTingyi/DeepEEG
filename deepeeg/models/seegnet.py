@@ -26,35 +26,38 @@ def SEEGNet(nclass,
 
     inputs = Input(shape=(channel_size, sample_size, 1))
     ##################################################################
-    sinc = SincConv(filters=F1,
-                    kernel_size=kernel_size,
-                    sample_rate=sample_rate,
-                    min_low_hz=min_low_hz,
-                    min_band_hz=min_band_hz)(inputs)
-    sinc = LayerNormalization(beta_regularizer=l1(l1_reg))(sinc)
-    block1 = DepthwiseConv2D((channel_size, 1),
-                             use_bias=False,
-                             depth_multiplier=D,
-                             depthwise_regularizer=l2(l2_reg))(sinc)
-    block1 = BatchNormalization()(block1)
-    block1 = Activation('relu')(block1)
-    block1 = AveragePooling2D((1, 4))(block1)
-    block1 = Dropout(dropout_rate)(block1)
+    x = SincConv(filters=F1,
+                 kernel_size=kernel_size,
+                 sample_rate=sample_rate,
+                 min_low_hz=min_low_hz,
+                 min_band_hz=min_band_hz)(inputs)
+    x = BatchNormalization(momentum=0.95)(x)
 
-    block1 = Conv2D(F1 * D, 1, use_bias=False)(block1)
-    block1 = BatchNormalization()(block1)
-    block1 = Activation('relu')(block1)
-    block1 = Dropout(dropout_rate)(block1)
+    x = DepthwiseConv2D((channel_size, 1),
+                        use_bias=False,
+                        depth_multiplier=D,
+                        depthwise_regularizer=l2(l2_reg))(x)
+    x = BatchNormalization(momentum=0.95)(x)
+    x = Activation('relu')(x)
+    x = Dropout(dropout_rate)(x)
+    x = Conv2D(F1 * D, 1, use_bias=False)(x)
+    x = BatchNormalization(momentum=0.95)(x)
+    x = Activation('relu')(x)
+    x = AveragePooling2D((1, 4))(x)
+    x = Dropout(dropout_rate)(x)
 
-    block2 = SeparableConv2D(F1 * D, (1, 16), use_bias=False,
-                             padding='same')(block1)
-    block2 = BatchNormalization()(block2)
-    block2 = Activation('relu')(block2)
-    block2 = AveragePooling2D((1, 8))(block2)
-    block2 = Dropout(dropout_rate)(block2)
+    x = DepthwiseConv2D((1, 16), use_bias=False, padding='same')(x)
+    x = BatchNormalization(momentum=0.95)(x)
+    x = Activation('relu')(x)
+    x = Dropout(dropout_rate)(x)
+    x = Conv2D(F1 * D, 1, use_bias=False)(x)
+    x = BatchNormalization(momentum=0.95)(x)
+    x = Activation('relu')(x)
+    x = AveragePooling2D((1, 8))(x)
+    x = Dropout(dropout_rate)(x)
 
-    flatten = Flatten(name='flatten')(block2)
-    dense = Dense(nclass, name='dense')(flatten)
-    sigmoid = Activation('softmax', name='softmax')(dense)
+    x = Flatten(name='flatten')(x)
+    x = Dense(nclass, name='dense')(x)
+    softmax = Activation('softmax', name='softmax')(x)
 
-    return Model(inputs=inputs, outputs=sigmoid)
+    return Model(inputs=inputs, outputs=softmax)
