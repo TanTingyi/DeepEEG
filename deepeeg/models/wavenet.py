@@ -3,11 +3,10 @@ from tensorflow.keras import Model, Sequential
 from tensorflow.keras.layers import Conv1D, Conv2D, Input, Add
 from tensorflow.keras.layers import Activation, Lambda, Dense, Dropout
 from tensorflow.keras.layers import BatchNormalization, Flatten
-from tensorflow.keras.layers import AveragePooling2D, AveragePooling1D
-from tensorflow.keras.layers import SeparableConv2D, Concatenate
-from tensorflow.keras.layers import DepthwiseConv2D, GlobalAveragePooling2D
+from tensorflow.keras.layers import AveragePooling2D, LSTM
+from tensorflow.keras.layers import GlobalAveragePooling2D
+from tensorflow.keras.layers import DepthwiseConv2D
 from tensorflow.keras.regularizers import l2
-from tensorflow import keras
 
 from ..layers import SincConv
 
@@ -240,18 +239,28 @@ class WaveNet(Model):
 class EEGWaveNetv1(Model):
     '''
     Implements the WaveNet network for EEG classification.
-    The shape of inputs must be [batch_size, signal_length, data_channels, 1].
+    The shape of inputs must be [batch_size, data_channels, signal_length, 1].
     Set tensorflow data format as channle last
     '''
-    def __init__(self, signal_length, data_channels, dilations, filter_width,
-                 residual_channels, dilation_channels, skip_channels,
-                 use_biases, regularizer):
+    def __init__(self,
+                 nclass,
+                 data_channels,
+                 signal_length,
+                 dilations,
+                 filter_width,
+                 residual_channels,
+                 dilation_channels,
+                 skip_channels,
+                 dropout_rate=0.,
+                 use_biases=False,
+                 regularizer=0.):
         '''
         Initializes the EEGWaveNet model.
         
         Args:
-            signal_length: How long of raw data.
+            nclass: N class.
             data_channels: How many channels of raw data.
+            signal_length: How long of raw data.
             dilations: A list with the dilation factor for each layer.
             filter_width: The samples that are included in each convolution,
                 after dilating.
@@ -260,23 +269,30 @@ class EEGWaveNetv1(Model):
                 convolution.
             skip_channels: How many filters to learn that contribute to the
                 quantized softmax output.
+            dropout_rate: Dropout rate.
             use_biases: Whether to add a bias layer to each convolution.
-                Default: False.
             regularizer: Regularzation weight
         '''
         super(EEGWaveNetv1, self).__init__()
-        self.signal_length = signal_length
+        self.nclass = nclass
         self.data_channels = data_channels
+        self.signal_length = signal_length
         self.dilations = dilations
         self.filter_width = filter_width
         self.residual_channels = residual_channels
         self.dilation_channels = dilation_channels
         self.skip_channels = skip_channels
+        self.dropout_rate = dropout_rate
         self.use_biases = use_biases
         self.regularizer = regularizer
         self.pre_block = self._build_preprocess_block()
         self.residual_blocks = self._build_residual_blocks()
         self.post_block = self._build_postprocess_block()
+
+    def model_summary(self):
+        self.pre_block.summary()
+        self.residual_blocks.summary()
+        self.post_block.summary()
 
     def _build_preprocess_block(self):
         # [batch_size, data_channels, signal_length, 1]
@@ -285,18 +301,12 @@ class EEGWaveNetv1(Model):
                 Input((self.data_channels, self.signal_length, 1)),
                 Conv2D(self.residual_channels, (1, self.filter_width),
                        padding='same',
-                       use_bias=self.use_biases,
-                       kernel_regularizer=l2(l=self.regularizer),
-                       bias_regularizer=l2(l=self.regularizer)),
-                BatchNormalization(),
-                Activation('elu'),
-                # [batch_size, data_channels, signal_length, residual_channels]
-                Conv2D(self.residual_channels, (self.data_channels, 1),
-                       use_bias=self.use_biases,
-                       kernel_regularizer=l2(l=self.regularizer),
-                       bias_regularizer=l2(l=self.regularizer)),
-                BatchNormalization(),
-                Activation('elu'),
+                       use_bias=self.use_biases),
+                BatchNormalization(momentum=0.85),
+                DepthwiseConv2D((self.data_channels, 1),
+                                use_bias=self.use_biases,
+                                depthwise_regularizer=l2(self.regularizer)),
+                BatchNormalization(momentum=0.85),
                 # [batch_size, 1, signal_length, residual_channels]
                 Lambda(tf.squeeze, arguments=dict(axis=1))
             ],
@@ -313,34 +323,34 @@ class EEGWaveNetv1(Model):
                              padding='causal',
                              activation='tanh',
                              use_bias=self.use_biases,
-                             kernel_regularizer=l2(l=self.regularizer),
-                             bias_regularizer=l2(l=self.regularizer))(inputs)
+                             kernel_regularizer=l2(self.regularizer),
+                             bias_regularizer=l2(self.regularizer))(inputs)
             gates = Conv1D(self.dilation_channels,
                            self.filter_width,
                            dilation_rate=dilation,
                            padding='causal',
                            activation='sigmoid',
                            use_bias=self.use_biases,
-                           kernel_regularizer=l2(l=self.regularizer),
-                           bias_regularizer=l2(l=self.regularizer))(inputs)
+                           kernel_regularizer=l2(self.regularizer),
+                           bias_regularizer=l2(self.regularizer))(inputs)
             out = filters * gates
-            skip_contribution = Conv1D(
-                self.skip_channels,
-                1,
-                padding='same',
-                use_bias=self.use_biases,
-                kernel_regularizer=l2(l=self.regularizer),
-                bias_regularizer=l2(l=self.regularizer))(out)
+            skip_contribution = Conv1D(self.skip_channels,
+                                       1,
+                                       padding='same',
+                                       use_bias=self.use_biases,
+                                       kernel_regularizer=l2(self.regularizer),
+                                       bias_regularizer=l2(
+                                           self.regularizer))(out)
             if last_layer:
                 return skip_contribution, None
             else:
-                transformed = Conv1D(
-                    self.residual_channels,
-                    1,
-                    padding='same',
-                    use_bias=self.use_biases,
-                    kernel_regularizer=l2(l=self.regularizer),
-                    bias_regularizer=l2(l=self.regularizer))(out)
+                transformed = Conv1D(self.residual_channels,
+                                     1,
+                                     padding='same',
+                                     use_bias=self.use_biases,
+                                     kernel_regularizer=l2(self.regularizer),
+                                     bias_regularizer=l2(
+                                         self.regularizer))(out)
                 return skip_contribution, inputs + transformed
 
         outputs = []
@@ -360,42 +370,19 @@ class EEGWaveNetv1(Model):
     def _build_postprocess_block(self):
         post_block = Sequential([
             Input((self.signal_length, self.skip_channels)),
-            BatchNormalization(),
-            Activation('elu'),
-            Dropout(0.5),
-            Conv1D(16,
+            BatchNormalization(momentum=0.85),
+            Activation('relu'),
+            Dropout(self.dropout_rate),
+            Conv1D(self.skip_channels,
                    1,
                    padding='same',
-                   strides=1,
-                   use_bias=self.use_biases,
-                   kernel_regularizer=l2(l=self.regularizer),
-                   bias_regularizer=l2(l=self.regularizer)),
-            BatchNormalization(),
-            Activation('elu'),
-            Dropout(0.5),
-            AveragePooling1D(pool_size=4),
-            Conv1D(8,
-                   3,
-                   padding='valid',
-                   strides=1,
-                   use_bias=self.use_biases,
-                   kernel_regularizer=l2(l=self.regularizer),
-                   bias_regularizer=l2(l=self.regularizer)),
-            BatchNormalization(),
-            Activation('elu'),
-            Dropout(0.5),
-            AveragePooling1D(pool_size=4),
-            Conv1D(4,
-                   1,
-                   padding='same',
-                   strides=1,
-                   use_bias=self.use_biases,
-                   kernel_regularizer=l2(l=self.regularizer),
-                   bias_regularizer=l2(l=self.regularizer)),
-            Flatten(),
-            Dense(2,
-                  kernel_regularizer=l2(l=self.regularizer),
-                  bias_regularizer=l2(l=self.regularizer))
+                   use_bias=self.use_biases),
+            BatchNormalization(momentum=0.85),
+            Activation('relu'),
+            Dropout(self.dropout_rate),
+            LSTM(self.skip_channels),
+            Dense(self.nclass),
+            Activation('softmax')
         ])
 
         return post_block
@@ -412,7 +399,7 @@ class EEGWaveNetv1(Model):
 class EEGWaveNetv2(Model):
     '''
     Implements the WaveNet network for EEG classification.
-    The shape of inputs must be [batch_size, signal_length, data_channels, 1].
+    The shape of inputs must be [batch_size, data_channels, signal_length, 1].
     Set tensorflow data format as channle last
     '''
     def __init__(self,
@@ -464,6 +451,11 @@ class EEGWaveNetv2(Model):
         self.pre_block = self._build_preprocess_block()
         self.residual_blocks = self._build_residual_blocks()
         self.post_block = self._build_postprocess_block()
+
+    def model_summary(self):
+        self.pre_block.summary()
+        self.residual_blocks.summary()
+        self.post_block.summary()
 
     def _build_preprocess_block(self):
         pre_block = Sequential(
@@ -556,8 +548,6 @@ class EEGWaveNetv2(Model):
         ])
         return post_block
 
-        return post_block
-
     def call(self, inputs, training=None):
         x = self.pre_block(inputs, training=training)
         x = self.residual_blocks(x, training=training)
@@ -568,7 +558,7 @@ class EEGWaveNetv2(Model):
 class EEGWaveNetv5(Model):
     '''
     Implements the WaveNet network for EEG classification.
-    The shape of inputs must be [batch_size, signal_length, data_channels, 1].
+    The shape of inputs must be [batch_size, data_channels, signal_length, 1].
     Set tensorflow data format as channle last
     '''
     def __init__(self,
@@ -632,6 +622,11 @@ class EEGWaveNetv5(Model):
         self.pre_block = self._build_preprocess_block()
         self.residual_blocks = self._build_residual_blocks()
         self.post_block = self._build_postprocess_block()
+
+    def model_summary(self):
+        self.pre_block.summary()
+        self.residual_blocks.summary()
+        self.post_block.summary()
 
     def _build_preprocess_block(self):
         pre_block = Sequential(
