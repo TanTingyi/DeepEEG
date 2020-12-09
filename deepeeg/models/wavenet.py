@@ -253,7 +253,9 @@ class EEGWaveNetv1(Model):
                  skip_channels,
                  dropout_rate=0.,
                  use_biases=False,
-                 regularizer=0.):
+                 regularizer=0.,
+                 *args,
+                 **kwargs):
         '''
         Initializes the EEGWaveNet model.
         
