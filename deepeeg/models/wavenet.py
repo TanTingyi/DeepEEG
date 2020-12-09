@@ -902,7 +902,9 @@ class EEGWaveNetv5(Model):
                  min_band_hz=1,
                  dropout_rate=0,
                  use_biases=False,
-                 regularizer=0):
+                 regularizer=0,
+                 *args,
+                 **kwargs):
         '''
         Initializes the EEGWaveNet model.
         
@@ -1025,7 +1027,6 @@ class EEGWaveNetv5(Model):
             Activation('relu'),
             AveragePooling2D((1, 4)),
             Dropout(self.dropout_rate),
-            
             DepthwiseConv2D((1, 16), use_bias=self.use_biases, padding='same'),
             BatchNormalization(momentum=0.85),
             Activation('relu'),
