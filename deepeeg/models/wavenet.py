@@ -889,8 +889,8 @@ class EEGWaveNetv5(Model):
     '''
     def __init__(self,
                  nclass,
-                 signal_length,
                  data_channels,
+                 signal_length,
                  kernel_size,
                  sample_rate,
                  dilations,
@@ -910,8 +910,8 @@ class EEGWaveNetv5(Model):
         
         Args:
             nclass
-            signal_length: How long of raw data.
             data_channels: How many channels of raw data.
+            signal_length: How long of raw data.
             kernel_size
             sample_rate
             dilations: A list with the dilation factor for each layer.
@@ -1015,14 +1015,13 @@ class EEGWaveNetv5(Model):
             output, current_layer = single_block(current_layer)
             outputs.append(output)
 
-        outputs = Concatenate()(outputs)
+        outputs = Add()(outputs)
         # [batch_size, 1, signal_length, skip_channels * len(dilations)]
         return Model(inputs, outputs, name='residual_blocks')
 
     def _build_postprocess_block(self):
         post_block = Sequential([
-            Input((1, self.signal_length,
-                   self.skip_channels * len(self.dilations))),
+            Input((1, self.signal_length, self.skip_channels)),
             BatchNormalization(momentum=0.85),
             Activation('relu'),
             AveragePooling2D((1, 4)),
