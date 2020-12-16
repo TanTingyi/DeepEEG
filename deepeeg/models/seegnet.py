@@ -62,7 +62,7 @@ def SEEGNet(nclass,
     c_block = AveragePooling2D((1, 8))(c_block)
     c_block = Dropout(dropout_rate)(c_block)
 
-    x = Flatten(name='flatten')(x)
+    x = Flatten(name='flatten')(c_block)
     x = Dense(nclass, name='dense')(x)
     softmax = Activation('softmax', name='softmax')(x)
 
